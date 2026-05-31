@@ -1,77 +1,98 @@
-import { animate, scroll, stagger, cubicBezier } from 'https://cdn.jsdelivr.net/npm/motion@11.11.16/+esm';
+const DEFAULT_CHARS = '@#S%?*+;:,. ';
+const COLS = 120;
+const FONT_SIZE = 7;
 
-// Check for reduced motion preference
-const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let currentMode = 'white';
+let video, canvas, ctx, output, octx, customCharsInput;
 
-if (prefersReducedMotion) {
-  // Skip animations if user prefers reduced motion
-  console.log('Reduced motion preference detected - skipping animations');
-} else {
-  let image = document.querySelector('.scaler img');
-  let firstSection = document.querySelector('main section:first-of-type');
-  let layers = document.querySelectorAll('.grid > .layer');
-
-  // Measure the natural size before animating
-  const naturalWidth = image.offsetWidth;
-  const naturalHeight = image.offsetHeight;
-  
-  // Get viewport dimensions in pixels
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-
-  // Animate image on scroll - shrink from full screen to natural size
-  scroll(
-    animate(image, {
-      width: [viewportWidth, naturalWidth],
-      height: [viewportHeight, naturalHeight]
-    }, {
-      width: { easing: cubicBezier(0.65, 0, 0.35, 1) },   // GSAP power2.inOut
-      height: { easing: cubicBezier(0.42, 0, 0.58, 1) }   // GSAP power1.inOut
-    }),
-    {
-      target: firstSection,
-      offset: ['start start', '80% end end'] 
-    }
-  );
-
-  // Animate each layer with staggered timing
-  // Different easing per layer: power1, power3, power4
-  const scaleEasings = [
-    cubicBezier(0.42, 0, 0.58, 1),  // Layer 1: GSAP power1.inOut
-    cubicBezier(0.76, 0, 0.24, 1),  // Layer 2: GSAP power3.inOut
-    cubicBezier(0.87, 0, 0.13, 1)   // Layer 3: GSAP power4.inOut
-  ];
-  
-  layers.forEach((layer, index) => {
-    // Calculate different end points for each layer
-    const endOffset = `${1 - (index * 0.05)} end`;
-    
-    // fade: opacity stays 0 until 55% of scroll progress, then fades to 1
-    scroll(
-      animate(layer, {
-        opacity: [0, 0, 1]
-      }, {
-        offset: [0, 0.55, 1],  // Hold at 0 until 55%, then animate to 1
-        easing: cubicBezier(0.61, 1, 0.88, 1)  // GSAP sine.out
-      }),
-      {
-        target: firstSection,
-        offset: ['start start', endOffset]
-      }
-    );
-    
-    // reveal: scale stays 0 until 30% of scroll progress, then scales to 1
-    scroll(
-      animate(layer, {
-        scale: [0, 0, 1]
-      }, {
-        offset: [0, 0.3, 1],   // Hold at 0 until 30%, then animate to 1
-        easing: scaleEasings[index]  // Different power curve per layer
-      }),
-      {
-        target: firstSection,
-        offset: ['start start', endOffset]
-      }
-    );
-  });
+function getChars() {
+  const val = customCharsInput.value.trim();
+  return val.length > 0 ? val + ' ' : DEFAULT_CHARS;
 }
+
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('#color-controls .btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+}
+
+function getColor(R, G, B, brightness) {
+  if (currentMode === 'white') return '#ffffff';
+  if (currentMode === 'grey') {
+    const v = Math.floor(brightness);
+    return `rgb(${v},${v},${v})`;
+  }
+  if (currentMode === 'green') {
+    const v = Math.floor(brightness);
+    return `rgb(0,${v},${Math.floor(v * 0.3)})`;
+  }
+  if (currentMode === 'color') return `rgb(${R},${G},${B})`;
+}
+
+function drawAscii(imageData, width, height) {
+  const CHARS = getChars();
+  const cellW = width / COLS;
+  const cellH = cellW * 2;
+  const rows = Math.floor(height / cellH);
+
+  output.width = COLS * FONT_SIZE;
+  output.height = rows * (FONT_SIZE * 2);
+
+  octx.fillStyle = '#0a0a0f';
+  octx.fillRect(0, 0, output.width, output.height);
+  octx.font = `${FONT_SIZE * 2}px "Courier New"`;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = Math.floor(c * cellW);
+      const y = Math.floor(r * cellH);
+      const i = (y * width + x) * 4;
+
+      const R = imageData.data[i];
+      const G = imageData.data[i + 1];
+      const B = imageData.data[i + 2];
+      const brightness = R * 0.299 + G * 0.587 + B * 0.114;
+
+      const charIdx = Math.floor((brightness / 255) * (CHARS.length - 1));
+      const char = CHARS[charIdx];
+
+      octx.fillStyle = getColor(R, G, B, brightness);
+      octx.fillText(char, c * FONT_SIZE, r * (FONT_SIZE * 2));
+    }
+  }
+}
+
+function loop() {
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  drawAscii(imageData, canvas.width, canvas.height);
+  requestAnimationFrame(loop);
+}
+
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+  video.srcObject = stream;
+  video.play();
+  video.onloadedmetadata = () => {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    requestAnimationFrame(loop);
+  };
+}
+
+function takeScreenshot() {
+  const link = document.createElement('a');
+  link.download = 'asciimezs.png';
+  link.href = output.toDataURL('image/png');
+  link.click();
+}
+
+window.onload = function() {
+  video = document.getElementById('video');
+  canvas = document.getElementById('canvas');
+  ctx = canvas.getContext('2d');
+  output = document.getElementById('output');
+  octx = output.getContext('2d');
+  customCharsInput = document.getElementById('custom-chars');
+  startCamera();
+};
